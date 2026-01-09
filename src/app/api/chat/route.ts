@@ -30,17 +30,23 @@ export async function POST(req: Request) {
       
       NO escribas introducciones ni conclusiones. Solo la lista.`;
     } else {
-      // Concatenar historial para que la IA sepa qué plan está ejecutando
       const context = messages.map((m: any) => `${m.role}: ${m.content}`).join('\n');
+      
       systemPrompt = `Eres un Experto Scripter de Roblox.
       CONTEXTO:
       ${context}
       
       TAREA: Generar el script Lua FINAL para el plan aprobado.
-      REGLAS:
-      - SOLO código Lua puro.
-      - Sin markdown.
-      - Usa servicios modernos (TweenService, RunService).`;
+      
+      ⚠️ REGLAS CRÍTICAS DE EJECUCIÓN (PLUGIN):
+      1. TU CÓDIGO SE EJECUTA CON LOADSTRING. NO EXISTE 'script'.
+      2. PROHIBIDO usar 'script.Parent'.
+      3. Si necesitas una parte, CRÉALA con Instance.new().
+      4. Si necesitas interactuar con algo, búscalo en workspace (ej: workspace.Baseplate).
+      5. Usa servicios modernos (TweenService, RunService).
+      6. Todo el código debe ser autocontenido y limpiar lo que crea si es temporal.
+      
+      SOLO CÓDIGO LUA. SIN MARKDOWN.`;
     }
 
     const lastMsg = messages[messages.length - 1].content;
