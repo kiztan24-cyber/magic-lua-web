@@ -1,4 +1,3 @@
-// src/app/api/chat/route.ts
 import { NextResponse } from 'next/server';
 import { kv } from '@vercel/kv';
 
@@ -20,31 +19,13 @@ export async function POST(req: Request) {
     }
 
     const apiKey = process.env.GOOGLE_GEMINI_API_KEY;
-    if (!apiKey) {
-      throw new Error('Missing GOOGLE_GEMINI_API_KEY env var');
-    }
+    if (!apiKey) throw new Error('Missing GOOGLE_GEMINI_API_KEY env var');
 
-    // --------- SELECCIÓN DE MODELO (SEGURA) ----------
-    const listModelsUrl = `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`;
-    const listResp = await fetch(listModelsUrl);
-    if (!listResp.ok) {
-      throw new Error(`ListModels failed: ${listResp.status} ${listResp.statusText}`);
-    }
-    const listData = await listResp.json();
-
-    const validModels =
-      listData.models?.filter((m: any) =>
-        m.supportedGenerationMethods?.includes('generateContent')
-      ) || [];
-
-    const modelName =
-      validModels.length > 0
-        ? validModels[0].name.split('/').pop()
-        : 'gemini-2.5-flash';
-
+    // MODELO FIJO (sin ListModels para evitar el 400)
+    const modelName = 'gemini-2.5-flash';
     const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
 
-    // --------- PROMPT DEL SISTEMA ----------
+    // ---------- PROMPT DEL SISTEMA ----------
     let systemPrompt = '';
 
     if (action === 'plan') {
@@ -80,8 +61,8 @@ ${context}
 ENTORNO DE EJECUCIÓN (IMPORTANTE):
 - El código se ejecuta con loadstring desde un plugin.
 - La variable "script" normalmente NO existe.
-- Está prohibido depender de script.Parent.
-- Si necesitas objetos, créalos tú mismo con Instance.new(...)
+- Evita depender de script.Parent.
+- Si necesitas objetos, créalos con Instance.new(...)
 - Si necesitas acceder a algo existente, búscalo explícitamente (por ejemplo, workspace.Baseplate).
 
 OBJETIVO:
@@ -90,16 +71,14 @@ OBJETIVO:
 REGLAS:
 - SOLO código Lua, sin markdown ni explicaciones.
 - No uses comentarios demasiado largos.
-- Usa servicios modernos de Roblox (RunService, TweenService, etc.) cuando tenga sentido.
 `.trim();
     }
 
     const lastMessage = messages[messages.length - 1];
-    const userText = typeof lastMessage?.content === 'string'
-      ? lastMessage.content
-      : '';
+    const userText =
+      typeof lastMessage?.content === 'string' ? lastMessage.content : '';
 
-    // --------- LLAMADA A GEMINI ----------
+    // ---------- LLAMADA A GEMINI ----------
     const resp = await fetch(geminiUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -124,7 +103,7 @@ REGLAS:
     let reply: string =
       data.candidates?.[0]?.content?.parts?.[0]?.text || 'Sin respuesta.';
 
-    // --------- MODO EJECUCIÓN: GUARDAR CÓDIGO EN KV ----------
+    // ---------- MODO EJECUCIÓN ----------
     if (action === 'execute') {
       const cleanCode = reply
         .replace(/```lua\s*/gi, '')
