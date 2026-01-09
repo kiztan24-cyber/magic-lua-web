@@ -15,13 +15,23 @@ export async function POST(req: Request) {
     let userPrompt = messages[messages.length - 1].content;
 
     if (action === 'plan') {
-      systemPrompt = `Eres un Arquitecto de Roblox Luau.
-      TU META: Analizar la petición y crear un PLAN TÉCNICO detallado.
-      FORMATO SALIDA: Markdown limpio.
-      - Usa listas para los pasos.
-      - Si necesitas investigar, simula que lo haces (ej: "Analizando API de PhysicsService...").
-      - NO generes código final todavía.
-      - Al final, pregunta: "¿Procedemos con este plan?"`;
+      systemPrompt = `Eres un Ingeniero Senior de Roblox.
+      TU OBJETIVO: Crear un Checklist Técnico de Implementación.
+      
+      REGLAS DE FORMATO:
+      1. NO uses párrafos largos ni introducciones ("Hola, claro que sí...").
+      2. Usa Markdown checkboxes para cada paso: "- [ ] Paso".
+      3. Sé extremadamente conciso y técnico.
+      
+      Ejemplo de salida deseada:
+      ### Summary Checklist
+      - [ ] Crear Script en ServerScriptService
+      - [ ] Definir RemoteEvent 'OnFire'
+      - [ ] Implementar lógica de debounce (0.5s)
+      - [ ] Conectar evento de daño al Humanoid
+
+      Escenario detectado: New Mechanic / Refactor
+      Herramienta sugerida: CreateScript`;
     } 
     else if (action === 'execute') {
       // Recuperamos el plan del historial de mensajes
