@@ -1,10 +1,9 @@
 import { NextResponse } from 'next/server';
-import { GoogleGenerativeAI } from "@google/generative-ai";
-
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import { kv } from '@vercel/kv';
 
-// Inicializar Gemini
-const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY!);
+// Configuración del timeout para Vercel
+export const maxDuration = 30;
 
 export async function POST(req: Request) {
   try {
@@ -14,33 +13,61 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Faltan datos' }, { status: 400 });
     }
 
-    // 1. Configurar el modelo con instrucciones de sistema estrictas
+    // Verificar que la API Key existe
+    if (!process.env.GOOGLE_GEMINI_API_KEY) {
+      console.error('GOOGLE_GEMINI_API_KEY no está configurada');
+      return NextResponse.json({ error: 'API Key missing' }, { status: 500 });
+    }
+
+    // Inicializar Gemini con el modelo correcto
+    const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY);
     
-    const model = genAI.getGenerativeModel({
-    // modelo válido en la API v1, recomendado para código
-    model: "gemini-1.5-flash-8b", 
-    systemInstruction: `
-    Eres un experto en Roblox Luau. Solo devuelves código ejecutable, sin markdown, sin explicaciones.
-     `,
+    // Usar el modelo estable y disponible
+    const model = genAI.getGenerativeModel({ 
+      model: "gemini-pro", // Modelo estable disponible en todos los planes
     });
 
-    // 2. Generar el script
-    const result = await model.generateContent(prompt);
-    let luaCode = result.response.text();
+    // Prompt mejorado con instrucciones claras
+    const fullPrompt = `
+Eres un experto en Roblox Luau. Genera SOLO código ejecutable sin explicaciones.
+REGLAS:
+- NO uses markdown (\`\`\`lua o \`\`\`)
+- NO agregues comentarios extensos
+- Usa la API moderna de Roblox (Instance.new, task.wait, etc)
+- El código se ejecutará en ServerStorage
 
-    // 3. Limpieza de seguridad (Sanitización)
-    // Aunque el prompt lo pide, a veces la IA falla. Limpiamos por si acaso.
-    luaCode = luaCode.replace(/```lua/g, '').replace(/```/g, '').trim();
+Tarea del usuario: ${prompt}
+`;
 
-    // 4. Guardar en el "Buzón" (Redis)
-    // Usamos la SessionID como clave. El script vive 60 segundos antes de expirar.
-    // Esto evita que se ejecuten comandos viejos si el plugin se desconecta.
+    const result = await model.generateContent(fullPrompt);
+    const response = await result.response;
+    let luaCode = response.text();
+
+    // Limpieza agresiva de markdown y espacios
+    luaCode = luaCode
+      .replace(/```lua\n?/g, '')
+      .replace(/```\n?/g, '')
+      .trim();
+
+    // Guardar en Redis con TTL de 60 segundos
     await kv.set(`session:${sessionId}`, luaCode, { ex: 60 });
 
-    return NextResponse.json({ success: true, message: "Script enviado al plugin" });
+    return NextResponse.json({ 
+      success: true, 
+      message: "Script generado y enviado" 
+    });
 
-  } catch (error) {
-    console.error(error);
-    return NextResponse.json({ error: 'Error generando script' }, { status: 500 });
+  } catch (error: any) {
+    // Log detallado para debug
+    console.error('Error completo:', {
+      message: error.message,
+      stack: error.stack,
+      cause: error.cause
+    });
+    
+    return NextResponse.json({ 
+      error: 'Error generando script',
+      details: error.message 
+    }, { status: 500 });
   }
 }
