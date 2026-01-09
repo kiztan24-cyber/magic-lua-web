@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenerativeAI } from "@google/generative-ai";
+
 import { kv } from '@vercel/kv';
 
 // Inicializar Gemini
@@ -14,17 +15,13 @@ export async function POST(req: Request) {
     }
 
     // 1. Configurar el modelo con instrucciones de sistema estrictas
-    const model = genAI.getGenerativeModel({ 
-      model: "gemini-1.5-flash", // Modelo rápido y económico
-      systemInstruction: `
-        Eres un experto en Roblox Luau. Tu tarea es generar scripts EJECUTABLES para Roblox Studio.
-        REGLAS CRÍTICAS:
-        1. NO uses bloques de código markdown (\`\`\`lua).
-        2. NO incluyas explicaciones ni texto adicional. Solo código puro.
-        3. Usa la API moderna de Roblox (ej: task.wait() en vez de wait()).
-        4. Si el script debe ir en el workspace, asume que 'script.Parent' es el objeto a crear o modificar.
-        5. Crea partes, instancias o lógica según pida el usuario.
-      `
+    
+    const model = genAI.getGenerativeModel({
+    // modelo válido en la API v1, recomendado para código
+    model: "gemini-1.5-flash-8b", 
+    systemInstruction: `
+    Eres un experto en Roblox Luau. Solo devuelves código ejecutable, sin markdown, sin explicaciones.
+     `,
     });
 
     // 2. Generar el script
