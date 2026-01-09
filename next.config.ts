@@ -1,15 +1,11 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  // Forzamos la salida standalone para Vercel
   output: "standalone",
-  // Desactivamos la comprobación estricta de TS por si hay algún error tonto bloqueando
   typescript: {
     ignoreBuildErrors: true,
-  },
-  eslint: {
-    ignoreDuringBuilds: true,
   }
+  // Removimos eslint porque ya no es soportado en Next.js 15+
 };
 
 export default nextConfig;
