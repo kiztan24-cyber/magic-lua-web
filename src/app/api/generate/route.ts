@@ -1,4 +1,3 @@
-// En tu route.ts, reemplaza TODO con esto para auto-detectar modelos disponibles
 import { NextResponse } from 'next/server';
 import { kv } from '@vercel/kv';
 
@@ -13,35 +12,37 @@ export async function POST(req: Request) {
     const apiKey = process.env.GOOGLE_GEMINI_API_KEY;
     if (!apiKey) return NextResponse.json({ error: 'API Key missing' }, { status: 500 });
 
-    // 1. OBTENER LISTA DE MODELOS DISPONIBLES (debug)
+    // ListModels para filtrar modelos válidos
     const listModelsUrl = `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`;
     const listResponse = await fetch(listModelsUrl);
     const listData = await listResponse.json();
-    console.log('Modelos disponibles:', listData.models?.map((m: any) => m.name) || 'Ninguno');
+    console.log('Modelos disponibles:', listData.models?.map((m: any) => ({ name: m.name, generationMethods: m.supportedGenerationMethods })) || 'Ninguno');
 
-    // 2. USAR EL PRIMERO DISPONIBLE (auto-detect)
-    const availableModels = listData.models || [];
-    if (availableModels.length === 0) {
-      return NextResponse.json({ error: 'No models available for your API key' }, { status: 500 });
+    // Filtrar modelos que soporten generateContent
+    const validModels = listData.models?.filter((m: any) => 
+      m.supportedGenerationMethods?.includes('generateContent')
+    ) || [];
+
+    if (validModels.length === 0) {
+      return NextResponse.json({ error: 'No generative models available. Regenerate API key at aistudio.google.com' }, { status: 500 });
     }
-    const modelName = availableModels[0].name.split('/').pop()!; // e.g. "gemini-1.5-pro"
-    console.log('Usando modelo:', modelName);
+
+    const modelName = validModels[0].name.split('/').pop()!;
+    console.log('Modelo seleccionado:', modelName);
 
     const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
-
-    const systemPrompt = `Roblox Luau experto. SOLO código, sin markdown: ${prompt}`;
 
     const response = await fetch(geminiUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        contents: [{ parts: [{ text: systemPrompt }] }]
+        contents: [{ parts: [{ text: `Roblox Luau: ${prompt}. SOLO código, sin markdown.` }] }]
       })
     });
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('Gemini Error:', errorText);
+      console.error('Error:', errorText);
       return NextResponse.json({ error: errorText }, { status: 500 });
     }
 
