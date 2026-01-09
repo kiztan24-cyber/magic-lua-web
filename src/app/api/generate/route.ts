@@ -12,21 +12,14 @@ export async function POST(req: Request) {
     }
 
     const apiKey = process.env.GOOGLE_GEMINI_API_KEY;
-    if (!apiKey) {
-      return NextResponse.json({ error: 'API Key missing' }, { status: 500 });
-    }
-
-    // Llamada directa a la API REST de Gemini (sin SDK)
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key=${apiKey}`;
     
-    const systemPrompt = `Eres un experto en Roblox Luau. Genera SOLO código ejecutable sin explicaciones ni markdown.
-
-Tarea: ${prompt}
-
-REGLAS ESTRICTAS:
-- NO uses \`\`\`lua ni \`\`\`
-- Sin comentarios extensos
-- Código directo para Roblox Studio`;
+    // --- CAMBIO CRÍTICO: Usamos gemini-1.5-flash en v1beta ---
+    // Esta es la ruta que FUNCIONA actualmente para cuentas gratuitas
+    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+    
+    const systemPrompt = `Eres un experto en Roblox Luau. Genera SOLO código ejecutable.
+    Tarea: ${prompt}
+    REGLAS: NO markdown, NO comentarios, usa API moderna.`;
 
     const response = await fetch(geminiUrl, {
       method: 'POST',
@@ -41,30 +34,21 @@ REGLAS ESTRICTAS:
     if (!response.ok) {
       const errorText = await response.text();
       console.error('Gemini API Error:', response.status, errorText);
-      return NextResponse.json({ 
-        error: `Gemini Error: ${response.status}` 
-      }, { status: 500 });
+      // Devolvemos el error exacto para verlo en el log si falla
+      return NextResponse.json({ error: errorText }, { status: 500 });
     }
 
     const data = await response.json();
     let luaCode = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
 
-    // Limpieza agresiva
-    luaCode = luaCode
-      .replace(/```lua\n?/g, '')
-      .replace(/```\n?/g, '')
-      .trim();
+    // Limpieza
+    luaCode = luaCode.replace(/```lua\n?/g, '').replace(/```\n?/g, '').trim();
 
-    // Guardar en Redis
     await kv.set(`session:${sessionId}`, luaCode, { ex: 60 });
 
-    console.log('✅ Script generado y guardado');
     return NextResponse.json({ success: true });
 
   } catch (error: any) {
-    console.error('Error completo:', error);
-    return NextResponse.json({ 
-      error: error.message 
-    }, { status: 500 });
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
