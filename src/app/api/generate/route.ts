@@ -1,62 +1,46 @@
 import { NextResponse } from 'next/server';
 import { kv } from '@vercel/kv';
 
-export const maxDuration = 30;
+export const maxDuration = 60; // Más tiempo para generar código
 
 export async function POST(req: Request) {
   try {
-    const { prompt, sessionId } = await req.json();
-
-    if (!prompt || !sessionId) return NextResponse.json({ error: 'Faltan datos' }, { status: 400 });
+    const { prompt, plan, sessionId } = await req.json(); // Recibimos el PLAN también
 
     const apiKey = process.env.GOOGLE_GEMINI_API_KEY;
-    if (!apiKey) return NextResponse.json({ error: 'API Key missing' }, { status: 500 });
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+    
+    const systemPrompt = `Eres un experto en Roblox Luau.
+    CONTEXTO: El usuario aprobó el siguiente plan de implementación:
+    ${plan}
+    
+    TAREA: Escribe el script Lua completo y funcional para realizar este plan.
+    REGLAS:
+    - SOLO código Lua. Sin explicaciones ni markdown.
+    - Usa Instance.new, task.wait, y servicios modernos.
+    - Todo en un solo script (ServerScript).`;
 
-    // ListModels para filtrar modelos válidos
-    const listModelsUrl = `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`;
-    const listResponse = await fetch(listModelsUrl);
-    const listData = await listResponse.json();
-    console.log('Modelos disponibles:', listData.models?.map((m: any) => ({ name: m.name, generationMethods: m.supportedGenerationMethods })) || 'Ninguno');
-
-    // Filtrar modelos que soporten generateContent
-    const validModels = listData.models?.filter((m: any) => 
-      m.supportedGenerationMethods?.includes('generateContent')
-    ) || [];
-
-    if (validModels.length === 0) {
-      return NextResponse.json({ error: 'No generative models available. Regenerate API key at aistudio.google.com' }, { status: 500 });
-    }
-
-    const modelName = validModels[0].name.split('/').pop()!;
-    console.log('Modelo seleccionado:', modelName);
-
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
-
-    const response = await fetch(geminiUrl, {
+    const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        contents: [{ parts: [{ text: `Roblox Luau: ${prompt}. SOLO código, sin markdown.` }] }]
+        contents: [{
+          parts: [{ text: `${systemPrompt}\n\nPetición original: ${prompt}` }]
+        }]
       })
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('Error:', errorText);
-      return NextResponse.json({ error: errorText }, { status: 500 });
-    }
-
     const data = await response.json();
     let luaCode = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-
+    
+    // Limpieza
     luaCode = luaCode.replace(/```lua\n?/g, '').replace(/```\n?/g, '').trim();
 
-    await kv.set(`session:${sessionId}`, luaCode, { ex: 60 });
+    await kv.set(`session:${sessionId}`, luaCode, { ex: 120 }); // 2 minutos de vida
 
     return NextResponse.json({ success: true });
 
   } catch (error: any) {
-    console.error('Error:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
