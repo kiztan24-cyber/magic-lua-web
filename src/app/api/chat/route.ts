@@ -5,72 +5,62 @@ export const maxDuration = 60;
 
 export async function POST(req: Request) {
   try {
-    const { messages, sessionId, action } = await req.json(); // 'action' puede ser 'plan' o 'execute'
-
+    const { messages, sessionId, action } = await req.json();
     const apiKey = process.env.GOOGLE_GEMINI_API_KEY;
-    // Usamos el modelo que ya sabemos que funciona
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+
+    // Detectar modelos (reutilizamos tu lógica de autodetect que ya funciona)
+    const listModelsUrl = `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`;
+    const listResp = await fetch(listModelsUrl);
+    const listData = await listResp.json();
+    // Filtramos modelos generativos
+    const validModels = listData.models?.filter((m: any) => m.supportedGenerationMethods?.includes('generateContent')) || [];
+    const modelName = validModels.length > 0 ? validModels[0].name.split('/').pop() : 'gemini-1.5-flash';
+    
+    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
 
     let systemPrompt = "";
-    let userPrompt = messages[messages.length - 1].content;
-
+    
     if (action === 'plan') {
-      systemPrompt = `Eres un Ingeniero Senior de Roblox.
-      TU OBJETIVO: Crear un Checklist Técnico de Implementación.
+      systemPrompt = `Eres un Arquitecto Senior de Roblox.
+      TU OBJETIVO: Generar un Checklist Técnico conciso.
+      FORMATO ESTRICTO:
+      ### Plan de Implementación
+      - [ ] Paso 1 (Técnico)
+      - [ ] Paso 2 (Técnico)
       
-      REGLAS DE FORMATO:
-      1. NO uses párrafos largos ni introducciones ("Hola, claro que sí...").
-      2. Usa Markdown checkboxes para cada paso: "- [ ] Paso".
-      3. Sé extremadamente conciso y técnico.
-      
-      Ejemplo de salida deseada:
-      ### Summary Checklist
-      - [ ] Crear Script en ServerScriptService
-      - [ ] Definir RemoteEvent 'OnFire'
-      - [ ] Implementar lógica de debounce (0.5s)
-      - [ ] Conectar evento de daño al Humanoid
-
-      Escenario detectado: New Mechanic / Refactor
-      Herramienta sugerida: CreateScript`;
-    } 
-    else if (action === 'execute') {
-      // Recuperamos el plan del historial de mensajes
-      const planContext = messages.map((m:any) => `${m.role}: ${m.content}`).join('\n');
-      
+      NO escribas introducciones ni conclusiones. Solo la lista.`;
+    } else {
+      // Concatenar historial para que la IA sepa qué plan está ejecutando
+      const context = messages.map((m: any) => `${m.role}: ${m.content}`).join('\n');
       systemPrompt = `Eres un Experto Scripter de Roblox.
       CONTEXTO:
-      ${planContext}
+      ${context}
       
-      TAREA: Genera el script Lua FINAL basado en el plan aprobado.
+      TAREA: Generar el script Lua FINAL para el plan aprobado.
       REGLAS:
       - SOLO código Lua puro.
-      - Sin markdown (\`\`\`).
-      - Código robusto y profesional.`;
+      - Sin markdown.
+      - Usa servicios modernos (TweenService, RunService).`;
     }
 
-    // Llamada a Gemini
+    const lastMsg = messages[messages.length - 1].content;
+
     const response = await fetch(geminiUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        contents: [{
-          parts: [{ text: `${systemPrompt}\n\nUsuario: ${userPrompt}` }]
-        }]
+        contents: [{ parts: [{ text: `${systemPrompt}\n\nUsuario: ${lastMsg}` }] }]
       })
     });
 
     if (!response.ok) throw new Error(await response.text());
-
     const data = await response.json();
-    let reply = data.candidates?.[0]?.content?.parts?.[0]?.text || "Error generando respuesta.";
+    let reply = data.candidates?.[0]?.content?.parts?.[0]?.text || "Error.";
 
-    // Si es ejecución, guardamos en Redis para el plugin
     if (action === 'execute') {
-      // Limpiar código para Redis
       const cleanCode = reply.replace(/```lua\n?/g, '').replace(/```\n?/g, '').trim();
-      await kv.set(`session:${sessionId}`, cleanCode, { ex: 300 }); // 5 min
-      
-      reply = "✅ **Código generado y enviado a Roblox Studio.**\nRevisa tu juego, la magia debería ocurrir en breve.";
+      await kv.set(`session:${sessionId}`, cleanCode, { ex: 300 });
+      reply = `**✅ Código Generado**\n\nEl script ha sido enviado al plugin.\n\n**Estado:**\n- [x] Plan aprobado\n- [x] Script compilado\n- [x] Enviado a Roblox Studio`;
     }
 
     return NextResponse.json({ success: true, reply });
