@@ -1,3 +1,4 @@
+// src/app/api/chat/route.ts
 import { NextResponse } from 'next/server';
 import { kv } from '@vercel/kv';
 
@@ -19,13 +20,31 @@ export async function POST(req: Request) {
     }
 
     const apiKey = process.env.GOOGLE_GEMINI_API_KEY;
-    if (!apiKey) throw new Error('Missing GOOGLE_GEMINI_API_KEY env var');
+    if (!apiKey) {
+      throw new Error('Missing GOOGLE_GEMINI_API_KEY env var');
+    }
 
-    // MODELO FIJO (sin ListModels para evitar el 400)
-    const modelName = 'gemini-2.5-flash';
+    // --------- SELECCIÓN DE MODELO (SEGURA) ----------
+    const listModelsUrl = `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`;
+    const listResp = await fetch(listModelsUrl);
+    if (!listResp.ok) {
+      throw new Error(`ListModels failed: ${listResp.status} ${listResp.statusText}`);
+    }
+    const listData = await listResp.json();
+
+    const validModels =
+      listData.models?.filter((m: any) =>
+        m.supportedGenerationMethods?.includes('generateContent')
+      ) || [];
+
+    const modelName =
+      validModels.length > 0
+        ? validModels[0].name.split('/').pop()
+        : 'gemini-2.5-flash';
+
     const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
 
-    // ---------- PROMPT DEL SISTEMA ----------
+    // --------- PROMPT DEL SISTEMA ----------
     let systemPrompt = '';
 
     if (action === 'plan') {
@@ -58,27 +77,35 @@ Eres un Experto Scripter de Roblox Luau.
 CONTEXTO DE LA CONVERSACIÓN:
 ${context}
 
-ENTORNO DE EJECUCIÓN (IMPORTANTE):
-- El código se ejecuta con loadstring desde un plugin.
-- La variable "script" normalmente NO existe.
-- Evita depender de script.Parent.
-- Si necesitas objetos, créalos con Instance.new(...)
-- Si necesitas acceder a algo existente, búscalo explícitamente (por ejemplo, workspace.Baseplate).
+ENTORNO DE EJECUCIÓN (MAGIC API):
+Tienes acceso a funciones globales especiales para facilitar tu trabajo. ÚSALAS:
 
-OBJETIVO:
-- Generar un único script Lua completamente funcional basado en el plan aprobado.
+1. \`MagicAPI.CreateScript(name, source, parent)\`:
+   - Crea un Script real en el juego.
+   - Úsalo SIEMPRE para lógica permanente (loops, eventos, NPCs).
+   - Ejemplo: 
+     \`MagicAPI.CreateScript("FollowerAI", "while true do ... end", game.ServerScriptService)\`
 
-REGLAS:
-- SOLO código Lua, sin markdown ni explicaciones.
-- No uses comentarios demasiado largos.
+2. \`MagicAPI.CreateLocalScript(name, source, parent)\`:
+   - Igual, pero crea un LocalScript (para StarterPlayer, etc).
+
+REGLAS CRÍTICAS:
+- NO escribas lógica compleja (bucles while, eventos) directamente en el código principal.
+- EN SU LUGAR: Genera el código de esa lógica como un string y usa \`MagicAPI.CreateScript\`.
+- Si necesitas una Part, créala con \`Instance.new\`.
+- Si necesitas un NPC, créalo parte por parte o busca uno existente.
+
+TU OBJETIVO:
+- Generar código Lua que use estas herramientas para cumplir la petición.
 `.trim();
     }
 
     const lastMessage = messages[messages.length - 1];
-    const userText =
-      typeof lastMessage?.content === 'string' ? lastMessage.content : '';
+    const userText = typeof lastMessage?.content === 'string'
+      ? lastMessage.content
+      : '';
 
-    // ---------- LLAMADA A GEMINI ----------
+    // --------- LLAMADA A GEMINI ----------
     const resp = await fetch(geminiUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -103,7 +130,7 @@ REGLAS:
     let reply: string =
       data.candidates?.[0]?.content?.parts?.[0]?.text || 'Sin respuesta.';
 
-    // ---------- MODO EJECUCIÓN ----------
+    // --------- MODO EJECUCIÓN: GUARDAR CÓDIGO EN KV ----------
     if (action === 'execute') {
       const cleanCode = reply
         .replace(/```lua\s*/gi, '')

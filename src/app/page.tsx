@@ -38,56 +38,58 @@ export default function ChatHome() {
   };
 
   const handleSend = async (text: string, action: 'plan' | 'execute' = 'plan') => {
-    if (!text.trim()) return;
+  if (!text.trim()) return;
 
-    const userMsg: Message = { id: uuidv4(), role: 'user', content: text };
-    setMessages(prev => [...prev, userMsg]);
-    setInput('');
-    setLoading(true);
+  const userMsg: Message = { id: uuidv4(), role: 'user', content: text };
+  setMessages(prev => [...prev, userMsg]);
+  setInput('');
+  setLoading(true);
+  setCurrentStep('Conectando...');
 
-    // Simulación de pasos de pensamiento para feedback visual
-    const steps = action === 'plan' 
-      ? ["🔍 Analizando requisitos...", "📚 Buscando en API de Roblox...", "🧠 Diseñando arquitectura...", "📝 Escribiendo plan..."]
-      : ["⚡ Optimizando código...", "🛡️ Verificando seguridad...", "🚀 Empaquetando para Roblox..."];
+  try {
+    const response = await fetch('/api/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: [...messages, userMsg], sessionId, action })
+    });
 
-    let stepIndex = 0;
-    setCurrentStep(steps[0]);
-    const interval = setInterval(() => {
-      stepIndex++;
-      if (stepIndex < steps.length) setCurrentStep(steps[stepIndex]);
-    }, 1200);
+    const reader = response.body?.getReader();
+    const decoder = new TextDecoder();
 
-    try {
-      const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          messages: [...messages, userMsg], 
-          sessionId, 
-          action 
-        })
-      });
+    let buffer = '';
+    while (true) {
+      const { done, value } = await reader!.read();
+      if (done) break;
 
-      const data = await res.json();
-      
-      if (data.success) {
-        setMessages(prev => [...prev, {
-          id: uuidv4(),
-          role: 'ai',
-          content: data.reply,
-          type: action === 'plan' ? 'plan' : 'success'
-        }]);
-      } else {
-        throw new Error(data.error || "Error desconocido");
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const json = JSON.parse(line.slice(6));
+
+        if (json.type === 'status') {
+          setCurrentStep(json.data.message); // ✨ Actualización REAL
+        } else if (json.type === 'message') {
+          setMessages(prev => [...prev, {
+            id: uuidv4(),
+            role: 'ai',
+            content: json.data.content,
+            type: json.data.type === 'plan' ? 'plan' : 'success'
+          }]);
+        } else if (json.type === 'done') {
+          setLoading(false);
+          setCurrentStep('');
+        }
       }
-    } catch (e) {
-      setMessages(prev => [...prev, { id: uuidv4(), role: 'ai', content: "❌ Error de conexión. Intenta de nuevo." }]);
-    } finally {
-      clearInterval(interval);
-      setLoading(false);
-      setCurrentStep('');
     }
-  };
+  } catch (e) {
+    setMessages(prev => [...prev, { id: uuidv4(), role: 'ai', content: '❌ Error de conexión' }]);
+    setLoading(false);
+  }
+};
+
 
   return (
     <div className="flex h-screen bg-[#09090b] text-gray-200 font-sans selection:bg-yellow-500/30">
@@ -155,12 +157,17 @@ export default function ChatHome() {
           ))}
 
           {loading && (
-            <div className="flex justify-start pl-0 animate-pulse">
-              <div className="flex items-center gap-3 text-sm text-gray-500 bg-[#18181b] py-2 px-4 rounded-full border border-white/5">
-                <span className="animate-spin">⏳</span><span className="font-mono text-xs">{currentStep}</span>
-              </div>
-            </div>
-          )}
+  <div className="flex justify-start pl-0">
+    <div className="flex items-center gap-3 text-sm bg-[#18181b] py-3 px-5 rounded-2xl border border-white/5 shadow-xl">
+      <div className="relative">
+        <div className="w-2 h-2 bg-yellow-400 rounded-full animate-ping absolute"></div>
+        <div className="w-2 h-2 bg-yellow-400 rounded-full"></div>
+      </div>
+      <span className="font-mono text-xs text-gray-400 animate-pulse">{currentStep}</span>
+    </div>
+  </div>
+)}
+
           <div ref={messagesEndRef} />
         </div>
 
