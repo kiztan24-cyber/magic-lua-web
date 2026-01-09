@@ -70,10 +70,23 @@ export default function MagicLuaChat() {
   setMessages(prev => [...prev, userMsg]);
   setInput('');
   setLoading(true);
-  setCurrentStep('Initializing...');
+
+  // Simulación de pasos mientras espera respuesta
+  const steps = action === 'plan'
+    ? ['🔍 Analyzing request...', '📚 Checking Roblox API...', '🧠 Creating plan...']
+    : ['⚡ Optimizing code...', '🛡️ Validating logic...', '🚀 Packaging...'];
+
+  let stepIndex = 0;
+  setCurrentStep(steps[0]);
+  const stepInterval = setInterval(() => {
+    stepIndex++;
+    if (stepIndex < steps.length) {
+      setCurrentStep(steps[stepIndex]);
+    }
+  }, 1000);
 
   try {
-    const response = await fetch('/api/stream', {
+    const response = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -83,65 +96,35 @@ export default function MagicLuaChat() {
       })
     });
 
+    clearInterval(stepInterval);
+
     if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      throw new Error(`HTTP ${response.status}`);
     }
 
-    const reader = response.body?.getReader();
-    if (!reader) throw new Error('No reader available');
+    const data = await response.json();
 
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n\n');
-      buffer = lines.pop() || '';
-
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        
-        const jsonStr = line.slice(6).trim();
-        if (!jsonStr) continue;
-
-        try {
-          const json = JSON.parse(jsonStr);
-
-          if (json.type === 'status') {
-            setCurrentStep(json.data?.message || 'Processing...');
-          } else if (json.type === 'message') {
-            setMessages(prev => [...prev, {
-              id: uuidv4(),
-              role: 'ai',
-              content: json.data?.content || '',
-              type: json.data?.type === 'plan' ? 'plan' : 'success'
-            }]);
-          } else if (json.type === 'done') {
-            setLoading(false);
-            setCurrentStep('');
-          } else if (json.type === 'error') {
-            setMessages(prev => [...prev, {
-              id: uuidv4(),
-              role: 'ai',
-              content: `❌ Error: ${json.data?.message || 'Unknown error'}`
-            }]);
-            setLoading(false);
-            setCurrentStep('');
-          }
-        } catch (parseErr) {
-          console.error('JSON Parse Error:', parseErr, 'Raw line:', jsonStr);
-        }
-      }
+    if (data.error) {
+      throw new Error(data.error);
     }
-  } catch (e: any) {
-    console.error('Stream Error:', e);
+
     setMessages(prev => [...prev, {
       id: uuidv4(),
       role: 'ai',
-      content: `❌ Connection error: ${e.message}`
+      content: data.reply,
+      type: data.type === 'plan' ? 'plan' : 'success'
+    }]);
+
+    setLoading(false);
+    setCurrentStep('');
+
+  } catch (e: any) {
+    clearInterval(stepInterval);
+    console.error('Error:', e);
+    setMessages(prev => [...prev, {
+      id: uuidv4(),
+      role: 'ai',
+      content: `❌ Error: ${e.message}`
     }]);
     setLoading(false);
     setCurrentStep('');

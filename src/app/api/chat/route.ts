@@ -1,4 +1,3 @@
-// src/app/api/chat/route.ts
 import { NextResponse } from 'next/server';
 import { kv } from '@vercel/kv';
 
@@ -9,154 +8,93 @@ export async function POST(req: Request) {
     const body = await req.json();
     const { messages, sessionId, action } = body;
 
-    if (!messages || !Array.isArray(messages)) {
-      throw new Error('Missing or invalid "messages" array');
-    }
-    if (!sessionId || typeof sessionId !== 'string') {
-      throw new Error('Missing or invalid "sessionId"');
-    }
-    if (action !== 'plan' && action !== 'execute') {
-      throw new Error('Invalid "action" (must be "plan" or "execute")');
+    if (!messages || !sessionId || !action) {
+      return NextResponse.json({ error: 'Missing fields' }, { status: 400 });
     }
 
     const apiKey = process.env.GOOGLE_GEMINI_API_KEY;
     if (!apiKey) {
-      throw new Error('Missing GOOGLE_GEMINI_API_KEY env var');
+      return NextResponse.json({ error: 'Missing API key' }, { status: 500 });
     }
 
-    // --------- SELECCIÓN DE MODELO (SEGURA) ----------
-    const listModelsUrl = `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`;
-    const listResp = await fetch(listModelsUrl);
-    if (!listResp.ok) {
-      throw new Error(`ListModels failed: ${listResp.status} ${listResp.statusText}`);
-    }
-    const listData = await listResp.json();
+    // Obtener scripts del juego
+    const scriptsData = await kv.get(`scripts:${sessionId}`);
+    const gameScripts = scriptsData ? JSON.parse(scriptsData as string) : [];
 
-    const validModels =
-      listData.models?.filter((m: any) =>
-        m.supportedGenerationMethods?.includes('generateContent')
-      ) || [];
-
-    const modelName =
-      validModels.length > 0
-        ? validModels[0].name.split('/').pop()
-        : 'gemini-2.5-flash';
-
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
-
-    // --------- PROMPT DEL SISTEMA ----------
+    // Preparar prompt
+    const lastMsg = messages[messages.length - 1]?.content || '';
+    
     let systemPrompt = '';
-
+    
     if (action === 'plan') {
-      systemPrompt = `
-Eres un Arquitecto Senior de Roblox Luau.
-
-OBJETIVO:
-- Analizar la petición del usuario.
-- Devolver un checklist técnico corto y claro para implementar la mecánica.
-
-FORMATO ESTRICTO (Markdown):
-### Plan de Implementación
-- [ ] Paso 1 (muy concreto, técnico)
-- [ ] Paso 2
-- [ ] Paso 3
-
-REGLAS:
-- Nada de introducciones, despedidas ni párrafos largos.
-- No generes código.
-- Máximo 8 pasos.
-`.trim();
+      systemPrompt = `You are a Roblox Architect. Create a brief technical plan (max 6 steps) in Markdown checklist format. No long explanations.`;
     } else {
-      const context = messages
-        .map((m: any) => `${m.role.toUpperCase()}: ${m.content}`)
-        .join('\n\n');
+      systemPrompt = `You are a Roblox Expert Scripter.
 
-      systemPrompt = `
-Eres un Experto Scripter de Roblox Luau.
+CONVERSATION:
+${messages.slice(-3).map((m: any) => `${m.role}: ${m.content}`).join('\n')}
 
-CONTEXTO DE LA CONVERSACIÓN:
-${context}
+GAME STATE:
+${gameScripts.length > 0 ? `Scripts: ${gameScripts.map((s: any) => s.path).join(', ')}` : 'No scripts yet'}
 
-ENTORNO DE EJECUCIÓN (MAGIC API):
-Tienes acceso a funciones globales especiales para facilitar tu trabajo. ÚSALAS:
+TOOLS AVAILABLE (MagicAPI):
+- MagicAPI.CreateScript(name, source, parent) - Create a Script
+- MagicAPI.CreateLocalScript(name, source, parent) - Create LocalScript
+- MagicAPI.CreatePart(name, props, parent) - Create Part
+- MagicAPI.CreateFolder(name, parent) - Create Folder
 
-1. \`MagicAPI.CreateScript(name, source, parent)\`:
-   - Crea un Script real en el juego.
-   - Úsalo SIEMPRE para lógica permanente (loops, eventos, NPCs).
-   - Ejemplo: 
-     \`MagicAPI.CreateScript("FollowerAI", "while true do ... end", game.ServerScriptService)\`
+CRITICAL RULES:
+1. Code runs via loadstring. NO "script" variable exists.
+2. For loops/events, create a Script file with MagicAPI.CreateScript
+3. Example for day/night cycle:
 
-2. \`MagicAPI.CreateLocalScript(name, source, parent)\`:
-   - Igual, pero crea un LocalScript (para StarterPlayer, etc).
+local code = [[
+local Lighting = game:GetService("Lighting")
+while task.wait(0.1) do
+    Lighting.ClockTime = (Lighting.ClockTime + 0.01) % 24
+end
+]]
+MagicAPI.CreateScript("DayNightCycle", code, "ServerScriptService")
 
-REGLAS CRÍTICAS:
-- NO escribas lógica compleja (bucles while, eventos) directamente en el código principal.
-- EN SU LUGAR: Genera el código de esa lógica como un string y usa \`MagicAPI.CreateScript\`.
-- Si necesitas una Part, créala con \`Instance.new\`.
-- Si necesitas un NPC, créalo parte por parte o busca uno existente.
-
-TU OBJETIVO:
-- Generar código Lua que use estas herramientas para cumplir la petición.
-`.trim();
+OUTPUT: Pure Lua code. No markdown blocks.`;
     }
 
-    const lastMessage = messages[messages.length - 1];
-    const userText = typeof lastMessage?.content === 'string'
-      ? lastMessage.content
-      : '';
+    // Llamar Gemini
+    const modelName = 'gemini-2.5-flash';
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
 
-    // --------- LLAMADA A GEMINI ----------
-    const resp = await fetch(geminiUrl, {
+    const resp = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              { text: systemPrompt },
-              { text: `\n\nPetición del usuario:\n${userText}` },
-            ],
-          },
-        ],
-      }),
+        contents: [{
+          parts: [
+            { text: systemPrompt },
+            { text: `\nUser: ${lastMsg}` }
+          ]
+        }]
+      })
     });
 
     if (!resp.ok) {
       const errText = await resp.text();
-      throw new Error(`Gemini error ${resp.status}: ${errText}`);
+      throw new Error(`Gemini: ${resp.status} - ${errText}`);
     }
 
     const data = await resp.json();
-    let reply: string =
-      data.candidates?.[0]?.content?.parts?.[0]?.text || 'Sin respuesta.';
+    let reply = data.candidates?.[0]?.content?.parts?.[0]?.text || 'No response';
 
-    // --------- MODO EJECUCIÓN: GUARDAR CÓDIGO EN KV ----------
+    // Si es execute, guardar en Redis
     if (action === 'execute') {
-      const cleanCode = reply
-        .replace(/```lua\s*/gi, '')
-        .replace(/```\s*/g, '')
-        .trim();
-
-      await kv.set(`session:${sessionId}`, cleanCode, { ex: 300 });
-
-      reply = [
-        '**✅ Código Generado**',
-        '',
-        'El script ha sido enviado al plugin MagicLua.',
-        '',
-        '**Estado:**',
-        '- [x] Plan aprobado',
-        '- [x] Script compilado',
-        '- [x] Enviado a Roblox Studio',
-      ].join('\n');
+      const clean = reply.replace(/```lua\s*/gi, '').replace(/```/g, '').trim();
+      await kv.set(`session:${sessionId}`, clean, { ex: 300 });
+      reply = '**✅ Code Generated**\n\nScript sent to Roblox Studio. Check your game!';
     }
 
-    return NextResponse.json({ success: true, reply });
+    return NextResponse.json({ success: true, reply, type: action });
+
   } catch (error: any) {
-    console.error('CHAT API ERROR:', error);
-    return NextResponse.json(
-      { error: error.message || 'Internal error' },
-      { status: 500 },
-    );
+    console.error('Chat Error:', error);
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
