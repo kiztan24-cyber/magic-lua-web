@@ -1,3 +1,4 @@
+// src/app/api/chat/route.ts
 import { NextResponse } from 'next/server';
 import { kv } from '@vercel/kv';
 
@@ -5,73 +6,151 @@ export const maxDuration = 60;
 
 export async function POST(req: Request) {
   try {
-    const { messages, sessionId, action } = await req.json();
-    const apiKey = process.env.GOOGLE_GEMINI_API_KEY;
+    const body = await req.json();
+    const { messages, sessionId, action } = body;
 
-    // Detectar modelos (reutilizamos tu lógica de autodetect que ya funciona)
-    const listModelsUrl = `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`;
-    const listResp = await fetch(listModelsUrl);
-    const listData = await listResp.json();
-    // Filtramos modelos generativos
-    const validModels = listData.models?.filter((m: any) => m.supportedGenerationMethods?.includes('generateContent')) || [];
-    const modelName = validModels.length > 0 ? validModels[0].name.split('/').pop() : 'gemini-1.5-flash';
-    
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
-
-    let systemPrompt = "";
-    
-    if (action === 'plan') {
-      systemPrompt = `Eres un Arquitecto Senior de Roblox.
-      TU OBJETIVO: Generar un Checklist Técnico conciso.
-      FORMATO ESTRICTO:
-      ### Plan de Implementación
-      - [ ] Paso 1 (Técnico)
-      - [ ] Paso 2 (Técnico)
-      
-      NO escribas introducciones ni conclusiones. Solo la lista.`;
-    } else {
-      const context = messages.map((m: any) => `${m.role}: ${m.content}`).join('\n');
-      
-      systemPrompt = `Eres un Experto Scripter de Roblox.
-      CONTEXTO:
-      ${context}
-      
-      TAREA: Generar el script Lua FINAL para el plan aprobado.
-      
-      ⚠️ REGLAS CRÍTICAS DE EJECUCIÓN (PLUGIN):
-      1. TU CÓDIGO SE EJECUTA CON LOADSTRING. NO EXISTE 'script'.
-      2. PROHIBIDO usar 'script.Parent'.
-      3. Si necesitas una parte, CRÉALA con Instance.new().
-      4. Si necesitas interactuar con algo, búscalo en workspace (ej: workspace.Baseplate).
-      5. Usa servicios modernos (TweenService, RunService).
-      6. Todo el código debe ser autocontenido y limpiar lo que crea si es temporal.
-      
-      SOLO CÓDIGO LUA. SIN MARKDOWN.`;
+    if (!messages || !Array.isArray(messages)) {
+      throw new Error('Missing or invalid "messages" array');
+    }
+    if (!sessionId || typeof sessionId !== 'string') {
+      throw new Error('Missing or invalid "sessionId"');
+    }
+    if (action !== 'plan' && action !== 'execute') {
+      throw new Error('Invalid "action" (must be "plan" or "execute")');
     }
 
-    const lastMsg = messages[messages.length - 1].content;
+    const apiKey = process.env.GOOGLE_GEMINI_API_KEY;
+    if (!apiKey) {
+      throw new Error('Missing GOOGLE_GEMINI_API_KEY env var');
+    }
 
-    const response = await fetch(geminiUrl, {
+    // --------- SELECCIÓN DE MODELO (SEGURA) ----------
+    const listModelsUrl = `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`;
+    const listResp = await fetch(listModelsUrl);
+    if (!listResp.ok) {
+      throw new Error(`ListModels failed: ${listResp.status} ${listResp.statusText}`);
+    }
+    const listData = await listResp.json();
+
+    const validModels =
+      listData.models?.filter((m: any) =>
+        m.supportedGenerationMethods?.includes('generateContent')
+      ) || [];
+
+    const modelName =
+      validModels.length > 0
+        ? validModels[0].name.split('/').pop()
+        : 'gemini-2.5-flash';
+
+    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
+
+    // --------- PROMPT DEL SISTEMA ----------
+    let systemPrompt = '';
+
+    if (action === 'plan') {
+      systemPrompt = `
+Eres un Arquitecto Senior de Roblox Luau.
+
+OBJETIVO:
+- Analizar la petición del usuario.
+- Devolver un checklist técnico corto y claro para implementar la mecánica.
+
+FORMATO ESTRICTO (Markdown):
+### Plan de Implementación
+- [ ] Paso 1 (muy concreto, técnico)
+- [ ] Paso 2
+- [ ] Paso 3
+
+REGLAS:
+- Nada de introducciones, despedidas ni párrafos largos.
+- No generes código.
+- Máximo 8 pasos.
+`.trim();
+    } else {
+      const context = messages
+        .map((m: any) => `${m.role.toUpperCase()}: ${m.content}`)
+        .join('\n\n');
+
+      systemPrompt = `
+Eres un Experto Scripter de Roblox Luau.
+
+CONTEXTO DE LA CONVERSACIÓN:
+${context}
+
+ENTORNO DE EJECUCIÓN (IMPORTANTE):
+- El código se ejecuta con loadstring desde un plugin.
+- La variable "script" normalmente NO existe.
+- Está prohibido depender de script.Parent.
+- Si necesitas objetos, créalos tú mismo con Instance.new(...)
+- Si necesitas acceder a algo existente, búscalo explícitamente (por ejemplo, workspace.Baseplate).
+
+OBJETIVO:
+- Generar un único script Lua completamente funcional basado en el plan aprobado.
+
+REGLAS:
+- SOLO código Lua, sin markdown ni explicaciones.
+- No uses comentarios demasiado largos.
+- Usa servicios modernos de Roblox (RunService, TweenService, etc.) cuando tenga sentido.
+`.trim();
+    }
+
+    const lastMessage = messages[messages.length - 1];
+    const userText = typeof lastMessage?.content === 'string'
+      ? lastMessage.content
+      : '';
+
+    // --------- LLAMADA A GEMINI ----------
+    const resp = await fetch(geminiUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        contents: [{ parts: [{ text: `${systemPrompt}\n\nUsuario: ${lastMsg}` }] }]
-      })
+        contents: [
+          {
+            parts: [
+              { text: systemPrompt },
+              { text: `\n\nPetición del usuario:\n${userText}` },
+            ],
+          },
+        ],
+      }),
     });
 
-    if (!response.ok) throw new Error(await response.text());
-    const data = await response.json();
-    let reply = data.candidates?.[0]?.content?.parts?.[0]?.text || "Error.";
+    if (!resp.ok) {
+      const errText = await resp.text();
+      throw new Error(`Gemini error ${resp.status}: ${errText}`);
+    }
 
+    const data = await resp.json();
+    let reply: string =
+      data.candidates?.[0]?.content?.parts?.[0]?.text || 'Sin respuesta.';
+
+    // --------- MODO EJECUCIÓN: GUARDAR CÓDIGO EN KV ----------
     if (action === 'execute') {
-      const cleanCode = reply.replace(/```lua\n?/g, '').replace(/```\n?/g, '').trim();
+      const cleanCode = reply
+        .replace(/```lua\s*/gi, '')
+        .replace(/```\s*/g, '')
+        .trim();
+
       await kv.set(`session:${sessionId}`, cleanCode, { ex: 300 });
-      reply = `**✅ Código Generado**\n\nEl script ha sido enviado al plugin.\n\n**Estado:**\n- [x] Plan aprobado\n- [x] Script compilado\n- [x] Enviado a Roblox Studio`;
+
+      reply = [
+        '**✅ Código Generado**',
+        '',
+        'El script ha sido enviado al plugin MagicLua.',
+        '',
+        '**Estado:**',
+        '- [x] Plan aprobado',
+        '- [x] Script compilado',
+        '- [x] Enviado a Roblox Studio',
+      ].join('\n');
     }
 
     return NextResponse.json({ success: true, reply });
-
   } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    console.error('CHAT API ERROR:', error);
+    return NextResponse.json(
+      { error: error.message || 'Internal error' },
+      { status: 500 },
+    );
   }
 }
