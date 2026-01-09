@@ -64,49 +64,60 @@ export default function MagicLuaChat() {
   };
 
   const handleSend = async (text: string, action: 'plan' | 'execute' = 'plan') => {
-    if (!text.trim()) return;
+  if (!text.trim()) return;
 
-    const userMsg: Message = { id: uuidv4(), role: 'user', content: text };
-    setMessages(prev => [...prev, userMsg]);
-    setInput('');
-    setLoading(true);
-    setCurrentStep('Connecting...');
+  const userMsg: Message = { id: uuidv4(), role: 'user', content: text };
+  setMessages(prev => [...prev, userMsg]);
+  setInput('');
+  setLoading(true);
+  setCurrentStep('Initializing...');
 
-    try {
-      const response = await fetch('/api/stream', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: [...messages, userMsg],
-          sessionId,
-          action
-        })
-      });
+  try {
+    const response = await fetch('/api/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messages: [...messages, userMsg],
+        sessionId,
+        action
+      })
+    });
 
-      const reader = response.body?.getReader();
-      const decoder = new TextDecoder();
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
 
-      let buffer = '';
-      while (true) {
-        const { done, value } = await reader!.read();
-        if (done) break;
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error('No reader available');
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n\n');
-        buffer = lines.pop() || '';
+    const decoder = new TextDecoder();
+    let buffer = '';
 
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          const json = JSON.parse(line.slice(6));
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        
+        const jsonStr = line.slice(6).trim();
+        if (!jsonStr) continue;
+
+        try {
+          const json = JSON.parse(jsonStr);
 
           if (json.type === 'status') {
-            setCurrentStep(json.data.message);
+            setCurrentStep(json.data?.message || 'Processing...');
           } else if (json.type === 'message') {
             setMessages(prev => [...prev, {
               id: uuidv4(),
               role: 'ai',
-              content: json.data.content,
-              type: json.data.type === 'plan' ? 'plan' : 'success'
+              content: json.data?.content || '',
+              type: json.data?.type === 'plan' ? 'plan' : 'success'
             }]);
           } else if (json.type === 'done') {
             setLoading(false);
@@ -115,21 +126,27 @@ export default function MagicLuaChat() {
             setMessages(prev => [...prev, {
               id: uuidv4(),
               role: 'ai',
-              content: `❌ Error: ${json.data.message}`
+              content: `❌ Error: ${json.data?.message || 'Unknown error'}`
             }]);
             setLoading(false);
+            setCurrentStep('');
           }
+        } catch (parseErr) {
+          console.error('JSON Parse Error:', parseErr, 'Raw line:', jsonStr);
         }
       }
-    } catch (e) {
-      setMessages(prev => [...prev, {
-        id: uuidv4(),
-        role: 'ai',
-        content: '❌ Connection error. Check console.'
-      }]);
-      setLoading(false);
     }
-  };
+  } catch (e: any) {
+    console.error('Stream Error:', e);
+    setMessages(prev => [...prev, {
+      id: uuidv4(),
+      role: 'ai',
+      content: `❌ Connection error: ${e.message}`
+    }]);
+    setLoading(false);
+    setCurrentStep('');
+  }
+};
 
   return (
     <div className="flex h-screen bg-gradient-to-br from-[#0a0a0b] via-[#12121 4] to-[#0f0f11] text-gray-200 font-sans overflow-hidden">

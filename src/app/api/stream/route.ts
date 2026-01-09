@@ -4,136 +4,183 @@ export const dynamic = 'force-dynamic';
 export const runtime = 'edge';
 
 export async function POST(req: Request) {
-  const { messages, sessionId, action } = await req.json();
-  const apiKey = process.env.GOOGLE_GEMINI_API_KEY!;
+  try {
+    const body = await req.json();
+    const { messages, sessionId, action } = body;
 
-  const encoder = new TextEncoder();
-  
-  const stream = new ReadableStream({
-    async start(controller) {
-      const send = (type: string, data: any) => {
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type, data })}\n\n`));
-      };
+    if (!messages || !sessionId || !action) {
+      return new Response(
+        JSON.stringify({ error: 'Missing required fields' }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
 
-      try {
-        send('status', { message: '🔍 Reading game state...' });
-        await new Promise(r => setTimeout(r, 600));
+    const apiKey = process.env.GOOGLE_GEMINI_API_KEY;
+    if (!apiKey) {
+      return new Response(
+        JSON.stringify({ error: 'Missing API key' }),
+        { status: 500, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
 
-        // Obtener lista de scripts actual
-        const scriptsData = await kv.get(`scripts:${sessionId}`);
-        const gameScripts = scriptsData ? JSON.parse(scriptsData as string) : [];
+    const encoder = new TextEncoder();
 
-        send('status', { message: '📚 Analyzing Roblox documentation...' });
-        await new Promise(r => setTimeout(r, 800));
+    const stream = new ReadableStream({
+      async start(controller) {
+        // Helper seguro para enviar eventos SSE
+        const sendEvent = (type: string, data: any) => {
+          try {
+            const payload = JSON.stringify({ type, data });
+            const message = `data: ${payload}\n\n`;
+            controller.enqueue(encoder.encode(message));
+          } catch (err) {
+            console.error('SSE Encode Error:', err);
+          }
+        };
 
-        send('status', { message: '🧠 Generating solution...' });
+        try {
+          // Paso 1: Leer estado del juego
+          sendEvent('status', { message: '🔍 Reading game state...' });
+          await new Promise(r => setTimeout(r, 500));
 
-        const modelName = 'gemini-2.5-flash';
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
-        
-        // CONTEXTO COMPLETO PARA LA IA
-        const systemContext = action === 'plan' ? `
+          const scriptsData = await kv.get(`scripts:${sessionId}`);
+          const gameScripts = scriptsData ? JSON.parse(scriptsData as string) : [];
+
+          sendEvent('status', { message: '📚 Analyzing Roblox API...' });
+          await new Promise(r => setTimeout(r, 700));
+
+          sendEvent('status', { message: '🧠 Generating solution...' });
+
+          // Preparar contexto para la IA
+          const lastMsg = messages[messages.length - 1]?.content || '';
+          
+          const systemPrompt = action === 'plan' ? `
 You are a Senior Roblox Architect.
 
-OBJECTIVE: Create a technical implementation checklist.
+TASK: Create a concise technical implementation plan.
 
 FORMAT (Markdown):
 ### Implementation Plan
-- [ ] Step 1 (specific and technical)
+- [ ] Step 1 (specific, technical)
 - [ ] Step 2
 - [ ] Step 3
 
 RULES:
 - Maximum 8 steps
-- No introductions or conclusions
-- Be extremely concise
+- No introductions or long explanations
 `.trim() : `
 You are an Expert Roblox Scripter.
 
-CONVERSATION CONTEXT:
-${messages.map((m: any) => `${m.role.toUpperCase()}: ${m.content}`).join('\n\n')}
+CONVERSATION HISTORY:
+${messages.map((m: any) => `${m.role}: ${m.content}`).join('\n')}
 
-CURRENT GAME STATE (Scripts in ServerScriptService):
-${gameScripts.length > 0 ? gameScripts.map((s: any) => `- ${s.path} (${s.type})`).join('\n') : 'No scripts yet'}
+CURRENT GAME STATE:
+${gameScripts.length > 0 ? `Scripts in game:\n${gameScripts.map((s: any) => `- ${s.path}`).join('\n')}` : 'No scripts yet'}
 
 AVAILABLE TOOLS (MagicAPI):
-You have access to these functions in your code:
+You have these functions available:
 
-1. **Script Management:**
-   - \`MagicAPI.ListAllScripts()\` - Get all scripts
-   - \`MagicAPI.ReadScript(path)\` - Read script source code
-   - \`MagicAPI.CreateScript(name, source, parentPath)\` - Create Script
-   - \`MagicAPI.CreateLocalScript(name, source, parentPath)\` - Create LocalScript
-   - \`MagicAPI.CreateModuleScript(name, source, parentPath)\` - Create ModuleScript
-   - \`MagicAPI.EditScript(path, oldCode, newCode)\` - Edit existing script
-   - \`MagicAPI.DeleteScript(path)\` - Delete script
+**Script Management:**
+- MagicAPI.CreateScript(name, source, parentPath) - Create a Script
+- MagicAPI.CreateLocalScript(name, source, parentPath) - Create LocalScript
+- MagicAPI.CreateModuleScript(name, source, parentPath) - Create ModuleScript
+- MagicAPI.ReadScript(path) - Read existing script
+- MagicAPI.EditScript(path, oldCode, newCode) - Edit script
+- MagicAPI.DeleteScript(path) - Delete script
 
-2. **Workspace Management:**
-   - \`MagicAPI.CreatePart(name, properties, parentPath)\` - Create Part with properties
-   - \`MagicAPI.CreateFolder(name, parentPath)\` - Create Folder
-   - \`MagicAPI.DeleteObject(path)\` - Delete object
-   - \`MagicAPI.FindObject(name)\` - Find object in workspace
+**Workspace:**
+- MagicAPI.CreatePart(name, properties, parentPath) - Create Part
+- MagicAPI.CreateFolder(name, parentPath) - Create Folder
+- MagicAPI.DeleteObject(path) - Delete object
 
-CRITICAL EXECUTION RULES:
-- Your code runs with \`loadstring\`. There is NO \`script\` variable.
-- **NEVER** use \`script.Parent\`.
-- For complex logic (loops, events), use \`MagicAPI.CreateScript\` to create a real Script file.
-- If you need to modify existing code, first read it with \`MagicAPI.ReadScript\`, then edit with \`MagicAPI.EditScript\`.
+CRITICAL RULES:
+1. Your code runs via loadstring. There is NO "script" variable.
+2. NEVER use script.Parent
+3. For persistent logic (loops, events), use MagicAPI.CreateScript to make a real Script file
+4. Example for day/night cycle:
+   \`\`\`lua
+   local cycleCode = [[
+   local Lighting = game:GetService("Lighting")
+   while task.wait(0.1) do
+       Lighting.ClockTime = (Lighting.ClockTime + 0.01) % 24
+   end
+   ]]
+   MagicAPI.CreateScript("DayNightCycle", cycleCode, "ServerScriptService")
+   \`\`\`
 
-YOUR TASK:
-Generate Lua code that uses MagicAPI tools to fulfill the user's request based on the approved plan.
-
-OUTPUT FORMAT:
+OUTPUT:
 - Pure Lua code only
-- No markdown, no explanations
-- Use MagicAPI functions for all operations
+- No markdown blocks
+- Use MagicAPI functions
 `.trim();
 
-        const lastMsg = messages[messages.length - 1]?.content || '';
+          // Llamar a Gemini
+          const modelName = 'gemini-2.5-flash';
+          const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
 
-        const resp = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{
-              parts: [
-                { text: systemContext },
-                { text: `\n\nUser Request:\n${lastMsg}` }
-              ]
-            }]
-          })
-        });
+          const geminiResp = await fetch(geminiUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{
+                parts: [
+                  { text: systemPrompt },
+                  { text: `\n\nUser Request:\n${lastMsg}` }
+                ]
+              }]
+            })
+          });
 
-        if (!resp.ok) throw new Error(`Gemini: ${resp.status}`);
+          if (!geminiResp.ok) {
+            const errText = await geminiResp.text();
+            throw new Error(`Gemini error: ${geminiResp.status} - ${errText}`);
+          }
 
-        const data = await resp.json();
-        let reply = data.candidates?.[0]?.content?.parts?.[0]?.text || 'No response';
+          const geminiData = await geminiResp.json();
+          let reply = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || 'No response from AI';
 
-        if (action === 'execute') {
-          send('status', { message: '📦 Packaging code...' });
-          const clean = reply.replace(/```lua\s*/gi, '').replace(/```/g, '').trim();
-          await kv.set(`session:${sessionId}`, clean, { ex: 300 });
+          // Si es ejecución, guardar en Redis
+          if (action === 'execute') {
+            sendEvent('status', { message: '📦 Packaging code...' });
+            
+            const cleanCode = reply
+              .replace(/```lua\s*/gi, '')
+              .replace(/```\s*/g, '')
+              .trim();
+
+            await kv.set(`session:${sessionId}`, cleanCode, { ex: 300 });
+            
+            sendEvent('status', { message: '✅ Code sent to Roblox Studio' });
+            reply = '**✅ Code Generated**\n\nThe script has been sent to your plugin. Check Roblox Studio!';
+          }
+
+          // Enviar respuesta final
+          sendEvent('message', { content: reply, type: action });
+          sendEvent('done', {});
           
-          send('status', { message: '✅ Code sent to Roblox Studio' });
-          reply = '**✅ Code Generated**\n\nCheck your game. The magic should happen shortly.';
+          controller.close();
+
+        } catch (error: any) {
+          console.error('Stream Error:', error);
+          sendEvent('error', { message: error.message || 'Unknown error' });
+          controller.close();
         }
-
-        send('message', { content: reply, type: action });
-        send('done', {});
-        controller.close();
-
-      } catch (error: any) {
-        send('error', { message: error.message });
-        controller.close();
       }
-    }
-  });
+    });
 
-  return new Response(stream, {
-    headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-    }
-  });
+    return new Response(stream, {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache, no-transform',
+        'Connection': 'keep-alive',
+      }
+    });
+
+  } catch (error: any) {
+    console.error('SSE Setup Error:', error);
+    return new Response(
+      JSON.stringify({ error: error.message }),
+      { status: 500, headers: { 'Content-Type': 'application/json' } }
+    );
+  }
 }
