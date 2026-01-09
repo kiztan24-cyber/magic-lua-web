@@ -5,7 +5,7 @@ const nextConfig: NextConfig = {
   typescript: {
     ignoreBuildErrors: true,
   }
-  // Removimos eslint porque ya no es soportado en Next.js 15+
 };
+
 
 export default nextConfig;

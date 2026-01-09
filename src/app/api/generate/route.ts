@@ -15,8 +15,8 @@ export async function POST(req: Request) {
     
     // --- CAMBIO CRÍTICO: Usamos gemini-1.5-flash en v1beta ---
     // Esta es la ruta que FUNCIONA actualmente para cuentas gratuitas
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
-    
+    const geminiUrl = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-pro-latest:generateContent?key=${apiKey}`;
+
     const systemPrompt = `Eres un experto en Roblox Luau. Genera SOLO código ejecutable.
     Tarea: ${prompt}
     REGLAS: NO markdown, NO comentarios, usa API moderna.`;
